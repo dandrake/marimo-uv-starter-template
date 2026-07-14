@@ -7,10 +7,83 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
-    import hanamaru_paths_bezier as logo
     import math
 
-    return logo, math, mo
+    return math, mo
+
+
+@app.cell
+def _(math):
+    # ---- placement: same affine map applied to points and (sans shift) tangents
+    def _place_point(p, *, scale, rot, center):
+        (x, y), (cx, cy) = p, center
+        c, s = math.cos(rot), math.sin(rot)
+        return (cx + (x * c - y * s) * scale, cy + (x * s + y * c) * scale)
+
+    def _place_vec(v, *, scale, rot):            # derivative: no translation term
+        x, y = v
+        c, s = math.cos(rot), math.sin(rot)
+        return ((x * c - y * s) * scale, (x * s + y * c) * scale)
+
+
+    def _hermite_to_path(knots, P, M, h, *, decimals, closed):
+        """Emit an SVG path from placed points P, placed velocities M, step h."""
+        f = lambda x, y: f"{x:.{decimals}f},{y:.{decimals}f}"
+        d = "M" + f(*P[0])
+        n = len(knots)
+        last = n if closed else n - 1
+        for i in range(last):
+            j = (i + 1) % n
+            b1 = (P[i][0] + h / 3 * M[i][0], P[i][1] + h / 3 * M[i][1])
+            b2 = (P[j][0] - h / 3 * M[j][0], P[j][1] - h / 3 * M[j][1])
+            d += "C" + f(*b1) + " " + f(*b2) + " " + f(*P[j])
+        return d + ("Z" if closed else "")
+
+
+    # --------------------------------------------------------------------------
+    # petals: prolate epitrochoid  x=k cos t - d cos(kt),  y=k sin t - d sin(kt)
+    # --------------------------------------------------------------------------
+    def epitrochoid_bezier(petals: int = 5, loop_depth: float = 2.0, *,
+                           segments: int = 40, fit: float = 40.0,
+                           center=(50.0, 50.0), rot: float = -math.pi / 2,
+                           decimals: int = 2) -> str:
+        k, d = petals + 1, loop_depth
+        scale = fit / (k + d)                     # k+d is the tip radius
+        h = 2 * math.pi / segments
+        knots = [i * h for i in range(segments)]  # closed: no duplicate endpoint
+
+        def pos(t): return (k*math.cos(t) - d*math.cos(k*t),
+                            k*math.sin(t) - d*math.sin(k*t))
+        def vel(t): return (-k*math.sin(t) + d*k*math.sin(k*t),
+                             k*math.cos(t) - d*k*math.cos(k*t))
+
+        P = [_place_point(pos(t), scale=scale, rot=rot, center=center) for t in knots]
+        M = [_place_vec(vel(t), scale=scale, rot=rot) for t in knots]
+        return _hermite_to_path(knots, P, M, h, decimals=decimals, closed=True)
+
+
+    # --------------------------------------------------------------------------
+    # centre: Archimedean spiral  r = a*theta  ->  (a t cos t, a t sin t)
+    # --------------------------------------------------------------------------
+    def archimedean_spiral_bezier(turns: float = 2.75, *, segments: int = 20,
+                                  fit: float = 14.0, center=(50.0, 50.0),
+                                  decimals: int = 2, phase: float = 0.0) -> str:
+        cx, cy = center
+        t_max = turns * 2 * math.pi
+        a = fit / t_max
+        h = t_max / segments
+        knots = [i * h for i in range(segments + 1)]  # open: keep both endpoints
+
+        def pos(t, p): return (a*t*math.cos(t + p), a*t*math.sin(t + p))
+        def vel(t, p): return (a*(math.cos(t + p) - t*math.sin(t+p)),
+                            a*(math.sin(t+p) + (t+p)*math.cos(t+p)))
+
+        P = [(cx + pos(t, phase)[0], cy + pos(t, phase)[1]) for t in knots]
+        M = [vel(t, phase) for t in knots]
+        return _hermite_to_path(knots, P, M, h, decimals=decimals, closed=False)
+
+
+    return archimedean_spiral_bezier, epitrochoid_bezier
 
 
 @app.cell(hide_code=True)
@@ -48,14 +121,20 @@ def _(math, mo):
 
 
 @app.cell(hide_code=True)
-def _(logo, mo, sliders_left, sliders_right):
+def _(
+    archimedean_spiral_bezier,
+    epitrochoid_bezier,
+    mo,
+    sliders_left,
+    sliders_right,
+):
     phase = sliders_left.value[0]
     display_size = sliders_left.value[1]
     turns = sliders_right.value[0]
     fit = sliders_right.value[1]
 
-    petals = logo.epitrochoid_bezier(petals=5, loop_depth=2.0, segments=40)
-    spiral = logo.archimedean_spiral_bezier(turns=turns, segments=20, fit=fit, phase=phase)
+    petals = epitrochoid_bezier(petals=5, loop_depth=2.0, segments=40)
+    spiral = archimedean_spiral_bezier(turns=turns, segments=20, fit=fit, phase=phase)
     svg = f'''<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
          <path d="{petals}" fill="none" stroke="#DE3A28" stroke-width="3.2"
                 stroke-linejoin="round" stroke-linecap="round"/>
